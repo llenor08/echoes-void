@@ -1,0 +1,307 @@
+import React, { useState, useEffect } from 'react';
+import { createRoot } from 'react-dom/client';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  signInWithCustomToken, 
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  doc, 
+  setDoc, 
+  updateDoc, 
+  increment 
+} from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { 
+  Ghost, 
+  Zap, 
+  Plus, 
+  Coins, 
+  Video, 
+  ImageIcon, 
+  MessageCircle, 
+  Flame, 
+  Map as MapIcon, 
+  X, 
+  Send, 
+  Clock, 
+  Share2,
+  ChevronLeft,
+  Users,
+  ShieldAlert,
+  Globe,
+  TrendingUp,
+  MapPin,
+  Award,
+  ArrowRight
+} from 'lucide-react';
+
+// --- Firebase Configuration ---
+let firebaseConfig = {};
+try {
+  // Check global environment variable first
+  if (typeof __firebase_config !== 'undefined') {
+    firebaseConfig = JSON.parse(__firebase_config);
+  } else {
+    // Attempt to read from Vite's import.meta.env
+    try {
+      const viteConfig = import.meta.env.VITE_FIREBASE_CONFIG;
+      if (viteConfig) {
+        firebaseConfig = typeof viteConfig === 'string' ? JSON.parse(viteConfig) : viteConfig;
+      }
+    } catch (e) {
+      // Fallback to hardcoded default if env is unavailable
+      firebaseConfig = {
+        apiKey: "AIzaSyBnKA0MMgxD5SdbLrjuPGPMVL26bswALp4",
+        authDomain: "echoes-void.firebaseapp.com",
+        projectId: "echoes-void",
+        storageBucket: "echoes-void.firebasestorage.app",
+        messagingSenderId: "1007572780079",
+        appId: "1:1007572780079:web:8d8b3b0e0577b7ac3bf2da"
+      };
+    }
+  }
+} catch (e) {
+  console.error("Firebase config initialization failed:", e);
+}
+
+// Initialize Firebase services
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const storage = getStorage(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'echoes-sea-production';
+
+const FREE_DAILY_LIMIT = 3;
+const VIDEO_COST = 5;
+const SHADOW_GROUP_COST = 10;
+
+const SEA_CITIES = [
+  'Manila', 'Jakarta', 'Bangkok', 'Saigon', 'Kuala Lumpur', 'Singapore', 
+  'Phnom Penh', 'Vientiane', 'Yangon', 'Hong Kong', 'Taipei', 'Seoul', 'Tokyo'
+];
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('void');
+  const [echoes, setEchoes] = useState([]);
+  const [userData, setUserData] = useState({ credits: 0, usage: 0 });
+  const [selectedEcho, setSelectedEcho] = useState(null);
+  const [showModal, setShowModal] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [selectedCity, setSelectedCity] = useState('All');
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) { 
+        console.error("Authentication flow failed:", error); 
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user || !db) return;
+
+    // Sync User Stats (Private Collection)
+    const statsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'stats');
+    const unsubStats = onSnapshot(statsRef, (s) => {
+      if (s.exists()) {
+        setUserData(s.data());
+      } else {
+        setDoc(statsRef, { credits: 25, usage: 0, lastActive: Date.now() });
+      }
+    }, (err) => console.error("Stats sync error:", err));
+
+    // Sync Echoes (Public Collection)
+    const echoesRef = collection(db, 'artifacts', appId, 'public', 'data', 'echoes');
+    const unsubEchoes = onSnapshot(echoesRef, (s) => {
+      const data = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Sort in JS to avoid index requirement errors in Firestore
+      setEchoes(data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+    }, (err) => console.error("Echoes sync error:", err));
+
+    return () => { 
+      unsubStats(); 
+      unsubEchoes(); 
+    };
+  }, [user]);
+
+  const handlePost = async (e) => {
+    e.preventDefault();
+    if (!user || !db) return;
+    const content = e.target.content.value;
+    const file = e.target.media.files[0];
+    const city = e.target.city.value;
+    const isVideo = file?.type.includes('video');
+    const cost = isVideo ? VIDEO_COST : (userData.usage >= FREE_DAILY_LIMIT ? 2 : 0);
+
+    if (userData.credits < cost) { 
+      setShowModal('shop'); 
+      return; 
+    }
+
+    setIsUploading(true);
+    try {
+      let mediaUrl = null;
+      if (file && storage) {
+        const fileRef = ref(storage, `artifacts/${appId}/public/media/${user.uid}/${Date.now()}`);
+        await uploadBytes(fileRef, file);
+        mediaUrl = await getDownloadURL(fileRef);
+      }
+
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'echoes'), {
+        content, 
+        mediaUrl, 
+        city,
+        type: isVideo ? 'video' : (file ? 'photo' : 'text'),
+        authorId: user.uid,
+        energy: 0,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + (24 * 60 * 60 * 1000)
+      });
+
+      const statsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'stats');
+      await updateDoc(statsRef, { usage: increment(1), credits: increment(-cost) });
+      
+      setShowModal(null);
+    } catch (err) { 
+      console.error(err);
+      alert("Post Failed: Ensure Firestore rules are correctly deployed."); 
+    } finally { 
+      setIsUploading(false); 
+    }
+  };
+
+  const handleEnergize = async (echoId) => {
+    try {
+      const echoRef = doc(db, 'artifacts', appId, 'public', 'data', 'echoes', echoId);
+      await updateDoc(echoRef, { energy: increment(1) });
+    } catch (err) { 
+      console.error("Energy pulse failed:", err); 
+    }
+  };
+
+  const filteredEchoes = selectedCity === 'All' ? echoes : echoes.filter(e => e.city === selectedCity);
+
+  return (
+    <div className="min-h-screen bg-[#020203] text-zinc-100 font-sans pb-24 selection:bg-indigo-500/30">
+      <header className="sticky top-0 z-50 bg-black/60 backdrop-blur-xl border-b border-white/5 p-4 flex justify-between items-center">
+        <div className="flex items-center gap-2">
+          <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center">
+            <Ghost className="w-5 h-5 text-white" />
+          </div>
+          <h1 className="text-xl font-black italic tracking-tighter uppercase">Echoes <span className="text-indigo-500">SEA</span></h1>
+        </div>
+        <div className="bg-zinc-900 px-3 py-1.5 rounded-full flex items-center gap-2 border border-white/10">
+          <Coins className="w-3.5 h-3.5 text-amber-500" />
+          <span className="text-xs font-black">{userData.credits}</span>
+        </div>
+      </header>
+
+      <main className="max-w-md mx-auto px-4 pt-6">
+        <div className="flex gap-2 mb-8 overflow-x-auto pb-2 no-scrollbar">
+          {['All', ...SEA_CITIES].map(city => (
+            <button key={city} onClick={() => setSelectedCity(city)} className={`px-4 py-1.5 rounded-full text-[10px] font-bold uppercase whitespace-nowrap border transition-all ${selectedCity === city ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-zinc-900 border-white/5 text-zinc-500'}`}>{city}</button>
+          ))}
+        </div>
+
+        <div className="space-y-6">
+          {filteredEchoes.map(e => (
+            <div key={e.id} className="bg-zinc-900/40 border border-white/5 rounded-[32px] p-5 backdrop-blur-md">
+              <div className="flex justify-between items-center mb-4 opacity-30 text-[10px] font-black uppercase">
+                <span>{e.city}</span>
+                <span>24h Pulse</span>
+              </div>
+              <p className="text-sm leading-relaxed text-zinc-200 mb-4">{e.content}</p>
+              {e.mediaUrl && (
+                <div className="rounded-2xl overflow-hidden mb-4 border border-white/5 aspect-square bg-black">
+                  {e.type === 'video' ? (
+                    <video src={e.mediaUrl} className="w-full h-full object-cover" controls />
+                  ) : (
+                    <img src={e.mediaUrl} className="rounded-2xl w-full h-full object-cover" alt="Echo media" />
+                  )}
+                </div>
+              )}
+              <div className="flex gap-6 pt-4 border-t border-white/5">
+                <button onClick={() => handleEnergize(e.id)} className="flex items-center gap-2 text-zinc-500 text-xs font-bold hover:text-orange-500 transition-colors">
+                  <Flame className={`w-4 h-4 ${e.energy > 50 ? 'text-orange-500 fill-orange-500' : ''}`} /> {e.energy || 0}
+                </button>
+                <button className="flex items-center gap-2 text-zinc-500 text-xs font-bold hover:text-indigo-400 transition-colors">
+                  <MessageCircle className="w-4 h-4"/> Reply
+                </button>
+              </div>
+            </div>
+          ))}
+          {filteredEchoes.length === 0 && (
+            <div className="py-20 text-center opacity-20">
+              <Ghost className="w-12 h-12 mx-auto mb-4" />
+              <p className="text-sm italic">The void is silent...</p>
+            </div>
+          )}
+        </div>
+      </main>
+
+      <nav className="fixed bottom-8 left-1/2 -translate-x-1/2 w-[90%] max-w-sm bg-black/80 backdrop-blur-3xl border border-white/10 rounded-full p-2 flex justify-around items-center z-50">
+        <button onClick={() => setActiveTab('void')} className="p-2">
+          <Ghost className={`w-6 h-6 ${activeTab === 'void' ? 'text-indigo-500' : 'text-zinc-600'}`} />
+        </button>
+        <button onClick={() => setShowModal('post')} className="w-14 h-14 bg-indigo-600 rounded-full flex items-center justify-center -mt-10 border-4 border-[#020203] shadow-lg shadow-indigo-600/40 active:scale-90 transition-transform">
+          <Plus className="w-8 h-8 text-white" />
+        </button>
+        <button onClick={() => setActiveTab('map')} className="p-2">
+          <MapIcon className={`w-6 h-6 ${activeTab === 'map' ? 'text-indigo-500' : 'text-zinc-600'}`} />
+        </button>
+      </nav>
+
+      {showModal === 'post' && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/90 backdrop-blur-md" onClick={() => setShowModal(null)} />
+          <form onSubmit={handlePost} className="relative bg-[#0d0d10] border border-white/10 rounded-[40px] p-8 w-full max-w-md animate-in zoom-in-95 duration-200">
+             <h2 className="text-2xl font-black italic uppercase mb-6">Create Echo</h2>
+             <textarea name="content" placeholder="Whisper into the void..." className="w-full bg-zinc-900 border-none rounded-3xl p-6 text-white text-lg min-h-[160px] mb-4 outline-none focus:ring-1 focus:ring-indigo-600" />
+             <div className="flex gap-4 mb-6">
+                <select name="city" className="bg-zinc-800 text-xs font-bold text-white border-none rounded-xl px-4 py-3 flex-1 outline-none">
+                   {SEA_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <label className="flex items-center gap-2 text-[10px] font-black uppercase text-zinc-500 cursor-pointer">
+                  <Video className="w-4 h-4" /> Media
+                  <input name="media" type="file" className="hidden" />
+                </label>
+             </div>
+             <button disabled={isUploading} className="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-transform uppercase tracking-widest text-xs">
+                {isUploading ? 'Sending...' : 'Send into the Void'}
+             </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default App;
+
+// --- MOUNTING LOGIC ---
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  const root = createRoot(rootElement);
+  root.render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+}

@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* These extra lines make the app feel like a premium mobile app */
+:root {
+  background-color: #020203;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+  background-color: #020203;
+}
+
+/* Hides the scrollbar for a smoother "Void" look */
+::-webkit-scrollbar {
+  width: 0px;
+}
